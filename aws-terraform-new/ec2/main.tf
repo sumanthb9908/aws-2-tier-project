@@ -7,7 +7,7 @@ resource "aws_instance" "app_server" {
   key_name                    = var.key_name
 
   root_block_device {
-    volume_size = 15 
+    volume_size = 10
     volume_type = "gp2" 
   }
 
@@ -15,3 +15,4 @@ resource "aws_instance" "app_server" {
     Name = var.instance_name
   }
 }
+

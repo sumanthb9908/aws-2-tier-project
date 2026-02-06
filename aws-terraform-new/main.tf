@@ -14,7 +14,7 @@ terraform {
 
 terraform {
   backend "s3" {
-    bucket  = "terraformbuckerforstatefiles" # create s3 bucket to store statefile
+    bucket  ="sumstatefile" # create s3 bucket to store statefile
     key     = "dev/terraform.tfstate"
     region  = "us-east-1"
     encrypt = false
@@ -44,16 +44,16 @@ module "security_group" {
 
 module "ec2" {
   source             = "./ec2"
-  ami_id             = "ami-04b4f1a9cf54c11d0" # Ubuntu 22.04 (us-east-1)
-  instance_type      = "t2.micro"
+  ami_id             = "ami-0b6c6ebed2801a5cb" # Ubuntu 22.04 (us-east-1)
+  instance_type      = "m7i-flex.large"
   subnet_id          = element(module.vpc.public_subnet_ids, 0)
   security_group_ids = [module.security_group.sg_ec2_sg_ssh_http_id]
-  key_name           = "project-keypair2025"  # create keypair manually & update name here
+  key_name           = "target"  # create keypair manually & update name here
 }
 
 module "eks" {
   source                 = "./eks"
-  cluster_name           = "my-eks-cluster"
+  cluster_name           = "sumcluster"
   subnet_ids             = module.vpc.public_subnet_ids
   cluster_sg_id          = module.security_group.eks_cluster_sg_id
   node_sg_id             = module.security_group.eks_node_sg_id
@@ -77,6 +77,7 @@ module "rds" {
   instance_class          = "db.t3.micro"
   backup_retention_period = 0
 }
+
 
 
 

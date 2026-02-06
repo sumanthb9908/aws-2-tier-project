@@ -1,0 +1,171 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-1'
+        AWS_ACCOUNT_ID     = '640056739169'
+        IMAGE_TAG          = "1.0.${BUILD_NUMBER}"
+        SCANNER_HOME       = tool 'sonar-scanner'
+        ECR_REGISTRY       = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+        FRONTEND_ECR_URI   = "${ECR_REGISTRY}/frontend-repo"
+        BACKEND_ECR_URI    = "${ECR_REGISTRY}/backend-repo"
+        GIT_REPO_NAME      = "aws-2-tier-helm-chart"
+        GIT_USER_NAME      = "sumanthb9908"
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timestamps()
+        timeout(time: 1, unit: 'HOURS')
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+
+        stage('Git Checkout') {
+            steps {
+                git branch: 'main',
+                    credentialsId: 'github-cred',
+                    url: 'https://github.com/sumanthb9908/aws-2-tier-project.git'
+            }
+        }
+
+        stage('Code Quality & Security Checks') {
+            parallel {
+                stage('SonarQube Analysis') {
+                    steps {
+                        withSonarQubeEnv('sonar-server') {
+                            sh """
+                                ${SCANNER_HOME}/bin/sonar-scanner \\
+                                    -Dsonar.projectName=app \\
+                                    -Dsonar.projectKey=app \\
+                                    -Dsonar.sources=. \\
+                                    -Dsonar.exclusions=**/node_modules/**,**/*.test.js
+                            """
+                        }
+                    }
+                }
+                // Uncomment if you want dependency checks
+                // stage('OWASP Dependency-Check') { ... }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                script {
+                    timeout(time: 5, unit: 'MINUTES') {
+                        waitForQualityGate abortPipeline: false, credentialsId: 'sonar-sq'
+                    }
+                }
+            }
+        }
+
+        stage('ECR Login') {
+            steps {
+                script {
+                    sh '''
+                        echo "Verifying AWS Identity..."
+                        aws sts get-caller-identity
+
+                        echo "Logging into ECR..."
+                        aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | \
+                        docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                    '''
+                }
+            }
+        }
+
+        stage('Build & Push Docker Images') {
+            parallel {
+                stage('Frontend Image') {
+                    steps {
+                        dir('frontend') {
+                            sh """
+                                echo "Building Frontend Docker image..."
+                                docker build -t frontend:${IMAGE_TAG} -t frontend:latest .
+                            """
+                        }
+
+                        // Uncomment for Trivy scan
+                        // sh "trivy image --severity HIGH,CRITICAL --exit-code 0 frontend:${IMAGE_TAG}"
+
+                        sh """
+                            docker tag frontend:${IMAGE_TAG} ${FRONTEND_ECR_URI}:${IMAGE_TAG}
+                            docker tag frontend:latest ${FRONTEND_ECR_URI}:latest
+                            docker push ${FRONTEND_ECR_URI}:${IMAGE_TAG}
+                            docker push ${FRONTEND_ECR_URI}:latest
+                        """
+                    }
+                }
+
+                stage('Backend Image') {
+                    steps {
+                        dir('backend') {
+                            sh """
+                                echo "Building Backend Docker image..."
+                                docker build -t backend:${IMAGE_TAG} -t backend:latest .
+                            """
+                        }
+
+                        // Uncomment for Trivy scan
+                        // sh "trivy image --severity HIGH,CRITICAL --exit-code 0 backend:${IMAGE_TAG}"
+
+                        sh """
+                            docker tag backend:${IMAGE_TAG} ${BACKEND_ECR_URI}:${IMAGE_TAG}
+                            docker tag backend:latest ${BACKEND_ECR_URI}:latest
+                            docker push ${BACKEND_ECR_URI}:${IMAGE_TAG}
+                            docker push ${BACKEND_ECR_URI}:latest
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Clone Helm Chart for CD') {
+            steps {
+                cleanWs()
+                git branch: 'main',
+                    credentialsId: 'github-cred',
+                    url: 'https://github.com/sumanthb9908/aws-2-tier-helm-chart.git'
+            }
+        }
+
+        stage('Update helm values.yaml with New Docker Image') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'github-cred', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
+                    sh """
+                        set -e
+
+                        git config user.email "sumanthb9908@example.com"
+                        git config user.name "sumanthb9908"
+
+                        echo "=== BEFORE ==="
+                        cat helm-chart/values.yaml
+
+                        sed -i "s|image: 640056739169.dkr.ecr.us-east-1.amazonaws.com/frontend-repo:.*|image: 640056739169.dkr.ecr.us-east-1.amazonaws.com/frontend-repo:${IMAGE_TAG}|" helm-chart/values.yaml
+                        sed -i "s|image: 640056739169.dkr.ecr.us-east-1.amazonaws.com/backend-repo:.*|image: 640056739169.dkr.ecr.us-east-1.amazonaws.com/backend-repo:${IMAGE_TAG}|" helm-chart/values.yaml
+
+                        echo "=== AFTER ==="
+                        cat helm-chart/values.yaml
+
+                        if git diff --quiet; then
+                            echo "No changes to commit. Skipping commit."
+                        else
+                            git add helm-chart/values.yaml
+                            git commit -m "Updated helm values.yaml to version ${IMAGE_TAG} [skip ci]"
+                            git remote set-url origin https://${GIT_USER}:${GIT_PASS}@github.com/sumanthb9908/aws-2-tier-helm-chart.git
+                            git push origin HEAD:main
+                            echo "✅ Helm chart updated successfully"
+                        fi
+                    """
+                }
+            }
+        }
+    }
+}

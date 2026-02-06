@@ -77,8 +77,8 @@ resource "aws_eks_node_group" "eks_nodegroup" {
     min_size     = 2
   }
 
-  instance_types = ["t2.medium"]
-  disk_size      = 40
+  instance_types = ["m7i-flex.large"]
+  disk_size      = 8
 
 #   # Optional SSH access
 #   remote_access {
@@ -101,3 +101,4 @@ resource "aws_eks_addon" "ebs_csi_driver" {
 
   depends_on = [aws_eks_node_group.eks_nodegroup]
 }
+
